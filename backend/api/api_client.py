@@ -20,6 +20,30 @@ class FootballDataPipeline:
             os.getenv("SUPABASE_KEY")
         )
 
+    def search_team_by_name(self, team_name: str):
+        """ Search for teams in the API for their name and returns a list of correspondences. """
+        endpoint = f"{self.base_url}/teams"
+        params = {"search": team_name}
+
+        print(f"Searching IDs for the team: {team_name}")
+        response = requests.get(endpoint, headers=self.headers, params=params)
+        response.raise_for_status()
+
+        data = response.json()
+
+        if not data or 'response' not in data or len(data['response']) == 0:
+            print("No team was found with this name.")
+            return []
+
+        teams_found = [{
+            "team_id": item["team"]["id"],
+            "name": item["team"]["name"],
+            "country": item["team"]["country"]
+        } for item in data['response']]
+
+        return teams_found
+
+
     def fetch_games(self, team_id: int, season: int):
         """ Busca dados brutos da API. """
         endpoint = f"{self.base_url}/fixtures"
@@ -49,7 +73,7 @@ class FootballDataPipeline:
         df['game_date'] = pd.to_datetime(df['game_date']).astype(str)
         return df
 
-    def save_to_supabase(self, df: pd.DataFrame, table_name: str = 'matches'):
+    def save_to_database(self, df: pd.DataFrame, table_name: str = 'matches'):
         """ Envia o DataFrame para o banco de dados. """
         if df.empty:
             print("Nenhum dado para salvar.")
