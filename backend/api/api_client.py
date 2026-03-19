@@ -1,81 +1,59 @@
 import os
-import requests
 import pandas as pd
+import requests
 from dotenv import load_dotenv
-
+from supabase import create_client, Client
 
 load_dotenv()
 
-API_KEY = os.getenv("RAPIDAPI_KEY")
-BASE_URL = "https://v3.football.api-sports.io"
 
-headers = {
-    "x-rapidapi-key": API_KEY,
-    "x-rapidapi-host": "v3.football.api-sports.io"
-}
+class FootballDataPipeline:
+    def __init__(self):
+        self.api_key = os.getenv("RAPIDAPI_KEY")
+        self.base_url = "https://v3.football.api-sports.io"
+        self.headers = {
+            "x-rapidapi-key": self.api_key,
+            "x-rapidapi-host": "v3.football.api-sports.io"
+        }
+        self.supabase: Client = create_client(
+            os.getenv("SUPABASE_URL"),
+            os.getenv("SUPABASE_KEY")
+        )
 
+    def fetch_games(self, team_id: int, season: int):
+        """ Busca dados brutos da API. """
+        endpoint = f"{self.base_url}/fixtures"
+        params = {"team": team_id, "season": season}
 
-def search_games_team(team_id, season):
-    """
-    Search the games of a specific team throughout a season.
-    :param team_id: The ID of the team in API-Football.
-    :param season: The year of the season that the games were played.
-    :return: The results of the games that the teams specified played.
-    """
-    endpoint = f"{BASE_URL}/fixtures"
-    params = {
-        "team": team_id,
-        "season": season
-    }
-
-    response = requests.get(endpoint, headers=headers, params=params)
-
-    if response.status_code == 200:
+        response = requests.get(endpoint, headers=self.headers, params=params)
+        response.raise_for_status()  # Lança erro se a requisição falhar
         return response.json()
-    else:
-        print(f"Error in the request: {response.status_code}")
-        return None
 
+    @staticmethod
+    def process_games(data):
+        """ Limpa e transforma os dados. """
+        if not data or 'response' not in data:
+            return pd.DataFrame()
 
-if __name__ == "__main__":
-    print("Searching for data in the API...")
-    data = search_games_team(team_id=157, season=2024)
+        clean_data = [{
+            "match_id": game["fixture"]["id"],
+            "game_date": game["fixture"]["date"],
+            "championship": game["league"]["name"],
+            "home_team": game["teams"]["home"]["name"],
+            "away_team": game["teams"]["away"]["name"],
+            "home_goals": game["goals"]["home"],
+            "away_goals": game["goals"]["away"]
+        } for game in data['response']]
 
-    if data:
-        if 'response' in data and data['response']:
-            games = data['response']
-            print(f"It was found {len(games)} games. Processing the data...\n")
+        df = pd.DataFrame(clean_data)
+        df['game_date'] = pd.to_datetime(df['game_date']).astype(str)
+        return df
 
-            clean_data = []
+    def save_to_supabase(self, df: pd.DataFrame, table_name: str = 'matches'):
+        """ Envia o DataFrame para o banco de dados. """
+        if df.empty:
+            print("Nenhum dado para salvar.")
+            return None
 
-            for game in games:
-                clean_data.append({
-                    "match_id": game["fixture"]["id"],
-                    "game_date": game["fixture"]["date"],
-                    "championship": game["league"]["name"],
-                    "home_team": game["teams"]["home"]["name"],
-                    "away_team": game["teams"]["away"]["name"],
-                    "home_goals": game["goals"]["home"],
-                    "away_goals": game["goals"]["away"]
-                })
-
-            df_games = pd.DataFrame(clean_data)
-
-            df_games['game_date'] = pd.to_datetime(df_games['game_date'])
-            print(df_games.head())
-
-            print(f"\nStructure of the data are ready for the database.")
-            print(df_games.info())
-
-            # if games:
-            #     first_game = games[0]
-            #     fixture = first_game['fixture']
-            #     teams = first_game['teams']
-            #
-            #     print(f"\nExample of match:")
-            #     print(f"Date: {fixture['date']}")
-            #     print(f"Competition: {first_game['league']['name']}")
-            #     print(f"Game: {teams['home']['name']} x {teams['away']['name']}")
-            # else:
-            #     print("\nThe API responded, but it didn't bring the list of games. See the raw return:")
-            #     print(data)
+        records = df.to_dict(orient='records')
+        return self.supabase.table(table_name).upsert(records).execute()
